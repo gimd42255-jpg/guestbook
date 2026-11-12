@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="ko">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>온라인 방명록 | Guestbook</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+
+<body>
+  <div class="container">
+    <!-- 상단 헤더 -->
+    <header class="header">
+      <span class="header-badge">Firebase Cloud Firestore</span>
+      <h1>온라인 방명록</h1>
+      <p>따뜻한 인사와 한마디를 남겨주세요 ✨</p>
+    </header>
+
+    <!-- 연결 상태 안내 배너 (설정 전이거나 오류 발생 시 표시) -->
+    <div id="statusBanner" class="status-banner"></div>
+
+    <!-- 방명록 입력 폼 -->
+    <section class="card">
+      <form id="guestbookForm" novalidate>
+        <div class="form-group">
+          <label for="nameInput" class="form-label">이름</label>
+          <input type="text" id="nameInput" class="form-input" placeholder="이름 또는 닉네임을 입력하세요" maxlength="30" />
+        </div>
+
+        <div class="form-group">
+          <label for="messageInput" class="form-label">메시지</label>
+          <textarea id="messageInput" class="form-textarea" placeholder="방명록 메시지를 입력하세요" maxlength="500"></textarea>
+        </div>
+
+        <div id="errorMsg" class="error-msg"></div>
+
+        <div class="form-footer">
+          <button type="submit" id="submitBtn" class="submit-btn">등록하기</button>
+        </div>
+      </form>
+    </section>
+
+    <!-- 방명록 목록 -->
+    <section>
+      <div class="list-header">
+        <h2 class="list-title">
+          남겨진 글
+          <span id="totalCount" class="count-badge">0</span>
+        </h2>
+      </div>
+
+      <div id="guestbookList" class="guestbook-list">
+        <div class="empty-state">방명록 데이터를 불러오는 중입니다...</div>
+      </div>
+    </section>
+  </div>
+
+  <!-- Firebase 및 방명록 동작 스크립트 -->
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
+    import {
+      getFirestore,
+      collection,
+      addDoc,
+      query,
+      orderBy,
+      onSnapshot,
+      serverTimestamp
+    } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
+
+    // =========================================================================
+    // [중요] Firebase Console의 [guestbook] 프로젝트에서 확인한
+    // firebaseConfig 정보를 아래에 입력해주세요!
+    // =========================================================================
+    const firebaseConfig = {
+      apiKey: "AIzaSyB73GRwu5mOTpfT_3VcExEPbsg8iyS0Yfc",
+      authDomain: "guestbook-7cb4b.firebaseapp.com",
+      projectId: "guestbook-7cb4b",
+      storageBucket: "guestbook-7cb4b.firebasestorage.app",
+      messagingSenderId: "331525946837",
+      appId: "1:331525946837:web:f01252a94f5f332166915c"
+    };
+
+    // DOM 요소 참조
+    const statusBanner = document.getElementById("statusBanner");
+    const guestbookForm = document.getElementById("guestbookForm");
+    const nameInput = document.getElementById("nameInput");
+    const messageInput = document.getElementById("messageInput");
+    const errorMsg = document.getElementById("errorMsg");
+    const submitBtn = document.getElementById("submitBtn");
+    const guestbookList = document.getElementById("guestbookList");
+    const totalCount = document.getElementById("totalCount");
+
+    // 1. 설정값 입력 여부 확인
+    const isConfigPlaceholder =
+      !firebaseConfig.apiKey ||
+      firebaseConfig.apiKey === "YOUR_API_KEY" ||
+      firebaseConfig.projectId.includes("xxxxx");
+
+    let db = null;
+    const COLLECTION_NAME = "guestbook";
+
+    if (isConfigPlaceholder) {
+      showStatusBanner(
+        "⚙️ 아직 Firebase 설정 정보(firebaseConfig)가 입력되지 않았습니다.",
+        "Firebase Console에서 [guestbook] 프로젝트의 firebaseConfig를 확인하여 알려주시면 바로 연결해 드립니다!"
+      );
+      guestbookList.innerHTML = `
+        <div class="empty-state">
+          Firebase 연결 후 방명록 목록이 이곳에 표시됩니다.
+        </div>
+      `;
+    } else {
+      try {
+        const app = initializeApp(firebaseConfig);
+        db = getFirestore(app);
+        subscribeToGuestbook();
+      } catch (err) {
+        console.error("Firebase 초기화 오류:", err);
+        showStatusBanner(
+          "⚠️ Firebase 초기화 중 오류가 발생했습니다.",
+          err.message
+        );
+      }
+    }
+
+    // 2. 실시간으로 방명록 목록 불러오기 (최신순 정렬: createdAt 내림차순)
+    function subscribeToGuestbook() {
+      const q = query(
+        collection(db, COLLECTION_NAME),
+        orderBy("createdAt", "desc")
+      );
+
+      onSnapshot(
+        q,
+        (snapshot) => {
+          statusBanner.classList.remove("show");
+          totalCount.textContent = snapshot.size;
+
+          if (snapshot.empty) {
+            guestbookList.innerHTML = `
+              <div class="empty-state">
+                아직 작성된 방명록이 없습니다.<br />첫 번째 방명록의 주인공이 되어보세요! 😊
+              </div>
+            `;
+            return;
+          }
+
+          guestbookList.innerHTML = "";
+          snapshot.forEach((docSnap) => {
+            const data = docSnap.data();
+            const itemEl = createGuestbookElement(data);
+            guestbookList.appendChild(itemEl);
+          });
+        },
+        (error) => {
+          console.error("Firestore 데이터 불러오기 오류:", error);
+          if (error.code === "permission-denied") {
+            showStatusBanner(
+              "🔒 Firestore 데이터베이스 권한 오류가 발생했습니다.",
+              "Firebase Console > Firestore Database > [규칙(Rules)] 탭에서 읽기/쓰기 권한을 허용(테스트 모드)으로 설정해주세요."
+            );
+          } else {
+            showStatusBanner(
+              "⚠️ 데이터를 불러오는 중 오류가 발생했습니다.",
+              error.message
+            );
+          }
+          guestbookList.innerHTML = `
+            <div class="empty-state">
+              데이터를 불러오지 못했습니다. 상단 안내 메시지를 확인해주세요.
+            </div>
+          `;
+        }
+      );
+    }
+
+    // 3. 방명록 등록 이벤트 처리
+    guestbookForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      hideError();
+
+      const name = nameInput.value.trim();
+      const message = messageInput.value.trim();
+
+      // 이름 또는 메시지 미입력 시 등록 방지
+      if (!name && !message) {
+        showError("이름과 메시지를 모두 입력해주세요.");
+        nameInput.focus();
+        return;
+      }
+      if (!name) {
+        showError("이름을 입력해주세요.");
+        nameInput.focus();
+        return;
+      }
+      if (!message) {
+        showError("메시지를 입력해주세요.");
+        messageInput.focus();
+        return;
+      }
+
+      if (!db || isConfigPlaceholder) {
+        showError("아직 Firebase 설정(firebaseConfig)이 완료되지 않았습니다.");
+        return;
+      }
+
+      try {
+        submitBtn.disabled = true;
+        submitBtn.textContent = "등록 중...";
+
+        await addDoc(collection(db, COLLECTION_NAME), {
+          name: name,
+          message: message,
+          createdAt: serverTimestamp()
+        });
+
+        // 입력창 초기화 (이름은 유지하거나 함께 비울 수 있음 - 여기서는 모두 깔끔히 초기화)
+        nameInput.value = "";
+        messageInput.value = "";
+        nameInput.focus();
+      } catch (err) {
+        console.error("방명록 저장 오류:", err);
+        showError("방명록 등록에 실패했습니다. (" + err.message + ")");
+      } finally {
+        submitBtn.disabled = false;
+        submitBtn.textContent = "등록하기";
+      }
+    });
+
+    // 입력 시 에러 메시지 자동 숨김
+    nameInput.addEventListener("input", hideError);
+    messageInput.addEventListener("input", hideError);
+
+    // 방명록 카드 DOM 생성 (XSS 방지를 위해 textContent 사용)
+    function createGuestbookElement(data) {
+      const item = document.createElement("article");
+      item.className = "guestbook-item";
+
+      const header = document.createElement("div");
+      header.className = "item-header";
+
+      const authorInfo = document.createElement("div");
+      authorInfo.className = "author-info";
+
+      const avatar = document.createElement("div");
+      avatar.className = "avatar";
+      const authorNameText = data.name || "익명";
+      avatar.textContent = authorNameText.charAt(0).toUpperCase();
+
+      const authorName = document.createElement("span");
+      authorName.className = "author-name";
+      authorName.textContent = authorNameText;
+
+      authorInfo.appendChild(avatar);
+      authorInfo.appendChild(authorName);
+
+      const createdAt = document.createElement("time");
+      createdAt.className = "created-at";
+      createdAt.textContent = formatTimestamp(data.createdAt);
+
+      header.appendChild(authorInfo);
+      header.appendChild(createdAt);
+
+      const msg = document.createElement("p");
+      msg.className = "item-message";
+      msg.textContent = data.message || "";
+
+      item.appendChild(header);
+      item.appendChild(msg);
+
+      return item;
+    }
+
+    // 작성 시간 포맷팅 함수
+    function formatTimestamp(timestamp) {
+      if (!timestamp) return "방금 전";
+      const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
+      const yyyy = date.getFullYear();
+      const mm = String(date.getMonth() + 1).padStart(2, "0");
+      const dd = String(date.getDate()).padStart(2, "0");
+      const hh = String(date.getHours()).padStart(2, "0");
+      const min = String(date.getMinutes()).padStart(2, "0");
+      return `${yyyy}.${mm}.${dd} ${hh}:${min}`;
+    }
+
+    function showError(msg) {
+      errorMsg.textContent = msg;
+      errorMsg.classList.add("show");
+    }
+
+    function hideError() {
+      errorMsg.textContent = "";
+      errorMsg.classList.remove("show");
+    }
+
+    function showStatusBanner(title, desc) {
+      statusBanner.innerHTML = "";
+      const strong = document.createElement("strong");
+      strong.textContent = title;
+      const span = document.createElement("span");
+      span.textContent = desc;
+      statusBanner.appendChild(strong);
+      statusBanner.appendChild(span);
+      statusBanner.classList.add("show");
+    }
+  </script>
+</body>
+
+</html>
